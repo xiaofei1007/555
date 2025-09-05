@@ -115,7 +115,8 @@
 
     // 登录时获取所有必要权限，避免后续交互式权限请求
     const loginRequest = {
-      scopes: ["User.Read", "Files.ReadWrite"] // 一次性获取所有需要的权限
+      scopes: ["User.Read", "Files.ReadWrite"], // 一次性获取所有需要的权限
+      prompt: "consent" // 强制显示权限同意界面，确保用户明确授予所有权限
     };
 
     // 文件访问权限配置（与登录权限保持一致）
@@ -147,8 +148,11 @@
           if (response) {
             account = response.account;
             updateAuthStatus(true);
-            showUploadStatus("✅ OneDrive-Anmeldung erfolgreich! Datei-Upload-Berechtigung erhalten.", "success");
+            // 显示获得的权限范围
+            const grantedScopes = response.scopes.join(", ");
+            showUploadStatus(`✅ OneDrive-Anmeldung erfolgreich! Erteilte Berechtigungen: ${grantedScopes}`, "success");
             console.log("从重定向响应中获取到账户:", account.username);
+            console.log("获得的权限范围:", response.scopes);
           } else {
             // 检查是否已经登录
             const accounts = msalInstance.getAllAccounts();
@@ -218,6 +222,8 @@
         }
         
         console.log("开始登录过程，获取OneDrive文件访问权限...");
+        console.log("请求的权限范围:", loginRequest.scopes);
+        console.log("强制权限确认:", loginRequest.prompt);
         showUploadStatus("🔄 Weiterleitung zur Anmeldung mit OneDrive-Berechtigung...", "warning");
         await msalInstance.loginRedirect(loginRequest);
         // 注意：重定向后，页面会重新加载，登录成功的处理会在 handleRedirectPromise 中进行
@@ -270,8 +276,16 @@
         return response.accessToken;
       } catch (error) {
         console.error("静默获取权限失败:", error);
-        // 不进行交互式获取，而是提示用户重新登录
-        throw new Error("OneDrive-Berechtigung fehlt. Bitte melden Sie sich ab und erneut an, um die erforderlichen Berechtigungen zu erteilen.");
+        console.error("错误详情:", error.errorCode, error.errorMessage);
+        
+        // 根据错误类型提供更具体的提示
+        if (error.errorCode === "consent_required") {
+          throw new Error("OneDrive-Berechtigung fehlt. Bitte melden Sie sich ab und erneut an, um die erforderlichen Berechtigungen zu erteilen.");
+        } else if (error.errorCode === "interaction_required") {
+          throw new Error("Sitzung abgelaufen. Bitte melden Sie sich erneut an.");
+        } else {
+          throw new Error(`Berechtigungsfehler: ${error.errorMessage || error.message}. Bitte melden Sie sich ab und erneut an.`);
+        }
       }
     }
 
