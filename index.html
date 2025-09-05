@@ -147,6 +147,8 @@
           const response = await msalInstance.handleRedirectPromise();
           if (response) {
             account = response.account;
+            // 设置为活动账户
+            msalInstance.setActiveAccount(account);
             updateAuthStatus(true);
             // 显示获得的权限范围
             const grantedScopes = response.scopes.join(", ");
@@ -158,6 +160,8 @@
             const accounts = msalInstance.getAllAccounts();
             if (accounts.length > 0) {
               account = accounts[0];
+              // 设置为活动账户
+              msalInstance.setActiveAccount(account);
               updateAuthStatus(true);
               console.log("从本地缓存中获取到账户:", account.username);
             }
@@ -271,7 +275,18 @@
 
       try {
         console.log("尝试静默获取文件访问权限...");
-        const response = await msalInstance.acquireTokenSilent(fileAccessRequest);
+        console.log("使用账户:", account.username);
+        
+        // 设置活动账户（推荐做法）
+        msalInstance.setActiveAccount(account);
+        
+        // 在请求中明确指定账户
+        const tokenRequest = {
+          ...fileAccessRequest,
+          account: account
+        };
+        
+        const response = await msalInstance.acquireTokenSilent(tokenRequest);
         console.log("静默获取文件访问令牌成功");
         return response.accessToken;
       } catch (error) {
