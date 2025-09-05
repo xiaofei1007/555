@@ -442,6 +442,37 @@
       }
     }
 
+    // 检查是否有待处理的上传
+    function checkPendingUpload() {
+      const pendingUpload = localStorage.getItem('pendingUpload');
+      if (pendingUpload) {
+        try {
+          const uploadInfo = JSON.parse(pendingUpload);
+          const timeDiff = Date.now() - uploadInfo.timestamp;
+          
+          // 如果时间差小于5分钟，尝试恢复上传
+          if (timeDiff < 5 * 60 * 1000 && pdfBlob && filename) {
+            console.log("检测到待处理的上传，尝试恢复...");
+            showUploadStatus("📄 Versuche Upload fortzusetzen...", "warning");
+            
+            // 清除待处理状态
+            localStorage.removeItem('pendingUpload');
+            
+            // 延迟2秒后尝试上传
+            setTimeout(async () => {
+              await uploadToOneDrive(pdfBlob, filename);
+            }, 2000);
+          } else {
+            // 清除过期的待处理状态
+            localStorage.removeItem('pendingUpload');
+          }
+        } catch (error) {
+          console.error("解析待处理上传信息失败:", error);
+          localStorage.removeItem('pendingUpload');
+        }
+      }
+    }
+
     // 绑定事件监听器
     function bindEventListeners() {
       console.log("绑定OneDrive事件监听器...");
