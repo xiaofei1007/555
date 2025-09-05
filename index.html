@@ -213,19 +213,9 @@
         }
         
         console.log("开始登录过程...");
-        
-        // 尝试重定向登录以避免弹窗问题
-        try {
-          const response = await msalInstance.loginPopup(loginRequest);
-          account = response.account;
-          updateAuthStatus(true);
-          showUploadStatus("✅ Erfolgreich angemeldet! OneDrive-Berechtigung wird beim ersten Upload angefragt.", "success");
-          console.log("登录成功:", account.username);
-        } catch (popupError) {
-          console.log("弹窗登录失败，尝试重定向登录:", popupError);
-          showUploadStatus("🔄 Popup blockiert, verwende Redirect-Login...", "warning");
-          await msalInstance.loginRedirect(loginRequest);
-        }
+        showUploadStatus("🔄 Weiterleitung zur Anmeldung...", "warning");
+        await msalInstance.loginRedirect(loginRequest);
+        // 注意：重定向后，页面会重新加载，登录成功的处理会在 handleRedirectPromise 中进行
         
       } catch (error) {
         console.error("Login error:", error);
@@ -245,19 +235,9 @@
         const logoutRequest = {
           account: account
         };
-        
-        try {
-          await msalInstance.logoutPopup(logoutRequest);
-        } catch (popupError) {
-          console.log("弹窗注销失败，尝试重定向注销:", popupError);
-          await msalInstance.logoutRedirect(logoutRequest);
-          return; // 重定向注销会刷新页面
-        }
-        
-        account = null;
-        updateAuthStatus(false);
-        showUploadStatus("✅ Erfolgreich abgemeldet!", "success");
-        console.log("注销成功");
+        showUploadStatus("🔄 Weiterleitung zur Abmeldung...", "warning");
+        await msalInstance.logoutRedirect(logoutRequest);
+        // 注意：重定向后，页面会重新加载
         
       } catch (error) {
         console.error("Logout error:", error);
@@ -289,19 +269,18 @@
         } catch (silentError) {
           console.log("静默获取失败，尝试交互式获取:", silentError);
           
-          // 静默获取失败，使用交互式获取（会弹出权限请求对话框）
-          try {
-            showUploadStatus("⏳ Berechtigung für OneDrive-Zugriff wird angefragt...", "warning");
-            const response = await msalInstance.acquireTokenPopup(fileAccessRequest);
-            console.log("交互式获取文件访问令牌成功");
-            showUploadStatus("✅ OneDrive-Berechtigung erteilt!", "success");
-            return response.accessToken;
-          } catch (popupError) {
-            console.log("弹窗获取权限失败，尝试重定向:", popupError);
-            showUploadStatus("🔄 Popup blockiert, verwende Redirect für Berechtigung...", "warning");
-            await msalInstance.acquireTokenRedirect(fileAccessRequest);
-            return null; // 重定向会刷新页面
-          }
+                   // 静默获取失败，使用重定向获取权限
+         console.log("需要交互式权限获取，使用重定向模式");
+         showUploadStatus("🔄 Weiterleitung für OneDrive-Berechtigung...", "warning");
+         
+         // 保存上传信息，重定向后恢复
+         localStorage.setItem('pendingUpload', JSON.stringify({
+           fileName: getFileAccessToken.uploadFileName || 'unknown',
+           timestamp: Date.now()
+         }));
+         
+         await msalInstance.acquireTokenRedirect(fileAccessRequest);
+         return null; // 重定向会刷新页面
         }
       } catch (error) {
         console.error("Token acquisition failed:", error);
@@ -330,6 +309,8 @@
         showUploadStatus("⏳ Berechtigung wird überprüft...", "");
         console.log(`开始上传文件: ${fileName}, 大小: ${fileBlob.size} bytes`);
         
+        // 设置文件名以便在重定向时使用
+        getFileAccessToken.uploadFileName = fileName;
         const accessToken = await getFileAccessToken();
         if (!accessToken) {
           // 重定向中，停止执行
