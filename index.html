@@ -15,9 +15,11 @@
     .auth-status { font-weight: bold; color: #0078d4; }
     .success { color: #107c10; }
     .error { color: #d13438; }
+    .warning { color: #ff8c00; }
     .onedrive-button { background-color: #0078d4; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; }
     .onedrive-button:hover { background-color: #106ebe; }
     .onedrive-button:disabled { background-color: #ccc; cursor: not-allowed; }
+    .info-box { background-color: #e7f3ff; border: 1px solid #0078d4; border-radius: 5px; padding: 10px; margin: 10px 0; }
   </style>
 </head>
 <body>
@@ -77,6 +79,10 @@
 
   <div id="onedrive-section">
     <h3>📁 OneDrive Synchronisation</h3>
+    <div class="info-box">
+      <strong>ℹ️ Hinweis:</strong> OneDrive-Integration erfordert Ihre Zustimmung zum Dateizugriff. 
+      Sie werden beim ersten Login nach der Berechtigung gefragt.
+    </div>
     <div id="auth-status" class="auth-status">Nicht angemeldet</div>
     <button id="login-button" class="onedrive-button">🔐 Mit OneDrive anmelden</button>
     <div style="margin: 10px 0; display:none;" id="auto-upload-option">
@@ -93,10 +99,10 @@
   <script>
     // ------------------ OneDrive Microsoft Graph API 集成 ------------------
     
-    // Microsoft Graph API 配置 - 使用Microsoft Graph Explorer的应用ID
+    // Microsoft Graph API 配置
     const msalConfig = {
       auth: {
-        clientId: "b75d6f6a-d423-4632-8cdc-c3e001334862", // 请替换为Azure中创建的应用ID
+        clientId: "de166dbe-3c91-48bc-bd07-603cbeb2a14d",
         authority: "https://login.microsoftonline.com/common",
         redirectUri: window.location.origin + window.location.pathname
       },
@@ -106,8 +112,14 @@
       }
     };
 
+    // 动态权限请求 - 不需要管理员预批准
     const loginRequest = {
-      scopes: ["User.Read", "Files.ReadWrite", "Files.ReadWrite.All"]
+      scopes: ["User.Read"] // 只请求基本权限
+    };
+
+    // OneDrive 文件访问权限 - 使用最低权限避免管理员批准
+    const fileAccessRequest = {
+      scopes: ["User.Read", "Files.ReadWrite"]  // 只使用委托权限，避免 .All 后缀
     };
 
     let msalInstance;
@@ -185,7 +197,7 @@
       }
     }
 
-    // OneDrive 登录
+    // OneDrive 登录 - 只请求基本权限
     async function loginToOneDrive() {
       try {
         showUploadStatus("⏳ Anmeldung läuft...", "");
@@ -201,27 +213,23 @@
         }
         
         console.log("开始登录过程...");
-        const response = await msalInstance.loginPopup(loginRequest);
-        account = response.account;
-        updateAuthStatus(true);
-        showUploadStatus("✅ Erfolgreich angemeldet!", "success");
-        console.log("登录成功:", account.username);
+        
+        // 尝试重定向登录以避免弹窗问题
+        try {
+          const response = await msalInstance.loginPopup(loginRequest);
+          account = response.account;
+          updateAuthStatus(true);
+          showUploadStatus("✅ Erfolgreich angemeldet! OneDrive-Berechtigung wird beim ersten Upload angefragt.", "success");
+          console.log("登录成功:", account.username);
+        } catch (popupError) {
+          console.log("弹窗登录失败，尝试重定向登录:", popupError);
+          showUploadStatus("🔄 Popup blockiert, verwende Redirect-Login...", "warning");
+          await msalInstance.loginRedirect(loginRequest);
+        }
         
       } catch (error) {
         console.error("Login error:", error);
-        
-        // 如果弹出窗口被阻止，尝试重定向登录
-        if (error.errorCode === "popup_window_error" || error.name === "BrowserAuthError") {
-          showUploadStatus("🔄 Popup blockiert, versuche Redirect-Login...", "");
-          try {
-            await msalInstance.loginRedirect(loginRequest);
-          } catch (redirectError) {
-            console.error("Redirect login error:", redirectError);
-            showUploadStatus("❌ Anmeldung fehlgeschlagen: " + redirectError.message, "error");
-          }
-        } else {
-          showUploadStatus("❌ Anmeldung fehlgeschlagen: " + error.message, "error");
-        }
+        showUploadStatus("❌ Anmeldung fehlgeschlagen: " + error.message, "error");
       }
     }
 
@@ -237,7 +245,15 @@
         const logoutRequest = {
           account: account
         };
-        await msalInstance.logoutPopup(logoutRequest);
+        
+        try {
+          await msalInstance.logoutPopup(logoutRequest);
+        } catch (popupError) {
+          console.log("弹窗注销失败，尝试重定向注销:", popupError);
+          await msalInstance.logoutRedirect(logoutRequest);
+          return; // 重定向注销会刷新页面
+        }
+        
         account = null;
         updateAuthStatus(false);
         showUploadStatus("✅ Erfolgreich abgemeldet!", "success");
@@ -252,8 +268,8 @@
       }
     }
 
-    // 获取访问令牌
-    async function getAccessToken() {
+    // 动态获取文件访问权限
+    async function getFileAccessToken() {
       if (!account) {
         throw new Error("Kein Konto gefunden. Bitte melden Sie sich zuerst an.");
       }
@@ -262,30 +278,34 @@
         throw new Error("MSAL nicht initialisiert");
       }
 
-      const request = {
-        scopes: ["Files.ReadWrite", "Files.ReadWrite.All"],
-        account: account
-      };
-
       try {
-        console.log("尝试静默获取访问令牌...");
-        const response = await msalInstance.acquireTokenSilent(request);
-        console.log("静默获取访问令牌成功");
-        return response.accessToken;
-      } catch (error) {
-        console.log("静默获取访问令牌失败，尝试交互式获取:", error);
-        if (error instanceof msal.InteractionRequiredAuthError) {
+        console.log("尝试获取文件访问权限...");
+        
+        // 首先尝试静默获取
+        try {
+          const response = await msalInstance.acquireTokenSilent(fileAccessRequest);
+          console.log("静默获取文件访问令牌成功");
+          return response.accessToken;
+        } catch (silentError) {
+          console.log("静默获取失败，尝试交互式获取:", silentError);
+          
+          // 静默获取失败，使用交互式获取（会弹出权限请求对话框）
           try {
-            console.log("尝试弹窗获取访问令牌...");
-            const response = await msalInstance.acquireTokenPopup(request);
-            console.log("弹窗获取访问令牌成功");
+            showUploadStatus("⏳ Berechtigung für OneDrive-Zugriff wird angefragt...", "warning");
+            const response = await msalInstance.acquireTokenPopup(fileAccessRequest);
+            console.log("交互式获取文件访问令牌成功");
+            showUploadStatus("✅ OneDrive-Berechtigung erteilt!", "success");
             return response.accessToken;
-          } catch (interactiveError) {
-            console.error("Interactive token acquisition failed:", interactiveError);
-            throw new Error("Token-Erfassung fehlgeschlagen: " + interactiveError.message);
+          } catch (popupError) {
+            console.log("弹窗获取权限失败，尝试重定向:", popupError);
+            showUploadStatus("🔄 Popup blockiert, verwende Redirect für Berechtigung...", "warning");
+            await msalInstance.acquireTokenRedirect(fileAccessRequest);
+            return null; // 重定向会刷新页面
           }
         }
-        throw new Error("Token-Erfassung fehlgeschlagen: " + error.message);
+      } catch (error) {
+        console.error("Token acquisition failed:", error);
+        throw new Error("Berechtigung für OneDrive-Zugriff fehlgeschlagen: " + error.message);
       }
     }
 
@@ -307,11 +327,17 @@
       }
 
       try {
-        showUploadStatus("⏳ Lade PDF zu OneDrive hoch...", "");
+        showUploadStatus("⏳ Berechtigung wird überprüft...", "");
         console.log(`开始上传文件: ${fileName}, 大小: ${fileBlob.size} bytes`);
         
-        const accessToken = await getAccessToken();
-        console.log("访问令牌获取成功");
+        const accessToken = await getFileAccessToken();
+        if (!accessToken) {
+          // 重定向中，停止执行
+          return false;
+        }
+        
+        showUploadStatus("⏳ Lade PDF zu OneDrive hoch...", "");
+        console.log("文件访问权限获取成功，开始上传");
         
         // 创建文件夹（如果不存在）
         const folderName = "Palettenscheine";
@@ -343,7 +369,7 @@
           
           let errorMessage = "Upload fehlgeschlagen";
           if (response.status === 401) {
-            errorMessage = "Anmeldung abgelaufen. Bitte melden Sie sich erneut an.";
+            errorMessage = "Berechtigung abgelaufen. Versuchen Sie erneut.";
           } else if (response.status === 403) {
             errorMessage = "Keine Berechtigung zum Hochladen. Überprüfen Sie die OneDrive-Berechtigungen.";
           } else if (response.status >= 500) {
@@ -412,7 +438,7 @@
         setTimeout(() => {
           statusDiv.textContent = "";
           statusDiv.className = "";
-        }, 5000);
+        }, 8000);
       }
     }
 
