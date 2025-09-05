@@ -674,8 +674,8 @@
       checkAndRefresh: function() {
         console.log("检查上传状态:", this);
         if (this.pdfUploaded && this.csvUploaded) {
-          console.log("PDF和CSV都已上传完成，准备刷新页面...");
-          showUploadStatus("✅ 所有文件上传完成！页面将在3秒后自动刷新...", "success");
+          console.log("Both PDF and CSV files have been successfully uploaded. Ready to refresh the page....");
+          showUploadStatus("✅ All files have been uploaded! The page will automatically refresh in 3 seconds....", "success");
           
           // 3秒后刷新页面
           setTimeout(() => {
