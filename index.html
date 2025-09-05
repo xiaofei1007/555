@@ -113,12 +113,12 @@
       }
     };
 
-    // 动态权限请求 - 不需要管理员预批准
+    // 登录时获取所有必要权限，避免后续交互式权限请求
     const loginRequest = {
-      scopes: ["User.Read"] // 只请求基本权限
+      scopes: ["User.Read", "Files.ReadWrite"] // 一次性获取所有需要的权限
     };
 
-    // OneDrive 文件访问权限 - 使用最低权限避免管理员批准
+    // 文件访问权限配置（与登录权限保持一致）
     const fileAccessRequest = {
       scopes: ["User.Read", "Files.ReadWrite"]  // 只使用委托权限，避免 .All 后缀
     };
@@ -147,6 +147,7 @@
           if (response) {
             account = response.account;
             updateAuthStatus(true);
+            showUploadStatus("✅ OneDrive-Anmeldung erfolgreich! Datei-Upload-Berechtigung erhalten.", "success");
             console.log("从重定向响应中获取到账户:", account.username);
           } else {
             // 检查是否已经登录
@@ -216,8 +217,8 @@
           throw new Error("MSAL 初始化失败");
         }
         
-        console.log("开始登录过程...");
-        showUploadStatus("🔄 Weiterleitung zur Anmeldung...", "warning");
+        console.log("开始登录过程，获取OneDrive文件访问权限...");
+        showUploadStatus("🔄 Weiterleitung zur Anmeldung mit OneDrive-Berechtigung...", "warning");
         await msalInstance.loginRedirect(loginRequest);
         // 注意：重定向后，页面会重新加载，登录成功的处理会在 handleRedirectPromise 中进行
         
@@ -252,7 +253,7 @@
       }
     }
 
-    // 动态获取文件访问权限
+    // 静默获取文件访问权限（不进行交互式获取）
     async function getFileAccessToken() {
       if (!account) {
         throw new Error("Kein Konto gefunden. Bitte melden Sie sich zuerst an.");
@@ -263,32 +264,14 @@
       }
 
       try {
-        console.log("尝试获取文件访问权限...");
-        
-        // 首先尝试静默获取
-        try {
-          const response = await msalInstance.acquireTokenSilent(fileAccessRequest);
-          console.log("静默获取文件访问令牌成功");
-          return response.accessToken;
-        } catch (silentError) {
-          console.log("静默获取失败，尝试交互式获取:", silentError);
-          
-                   // 静默获取失败，使用重定向获取权限
-         console.log("需要交互式权限获取，使用重定向模式");
-         showUploadStatus("🔄 Weiterleitung für OneDrive-Berechtigung...", "warning");
-         
-         // 保存上传信息，重定向后恢复
-         localStorage.setItem('pendingUpload', JSON.stringify({
-           fileName: getFileAccessToken.uploadFileName || 'unknown',
-           timestamp: Date.now()
-         }));
-         
-         await msalInstance.acquireTokenRedirect(fileAccessRequest);
-         return null; // 重定向会刷新页面
-        }
+        console.log("尝试静默获取文件访问权限...");
+        const response = await msalInstance.acquireTokenSilent(fileAccessRequest);
+        console.log("静默获取文件访问令牌成功");
+        return response.accessToken;
       } catch (error) {
-        console.error("Token acquisition failed:", error);
-        throw new Error("Berechtigung für OneDrive-Zugriff fehlgeschlagen: " + error.message);
+        console.error("静默获取权限失败:", error);
+        // 不进行交互式获取，而是提示用户重新登录
+        throw new Error("OneDrive-Berechtigung fehlt. Bitte melden Sie sich ab und erneut an, um die erforderlichen Berechtigungen zu erteilen.");
       }
     }
 
@@ -314,13 +297,7 @@
         const csvFileName = "PalettenscheinData.csv";
         console.log(`开始上传CSV文件: ${csvFileName}`);
         
-        // 设置文件名以便在重定向时使用
-        getFileAccessToken.uploadFileName = csvFileName;
         const accessToken = await getFileAccessToken();
-        if (!accessToken) {
-          // 重定向中，停止执行
-          return false;
-        }
         
         showUploadStatus("⏳ Lade CSV zu OneDrive hoch...", "");
         console.log("CSV文件访问权限获取成功，开始上传");
@@ -394,13 +371,7 @@
         showUploadStatus("⏳ Berechtigung wird überprüft...", "");
         console.log(`开始上传文件: ${fileName}, 大小: ${fileBlob.size} bytes`);
         
-        // 设置文件名以便在重定向时使用
-        getFileAccessToken.uploadFileName = fileName;
         const accessToken = await getFileAccessToken();
-        if (!accessToken) {
-          // 重定向中，停止执行
-          return false;
-        }
         
         showUploadStatus("⏳ Lade PDF zu OneDrive hoch...", "");
         console.log("文件访问权限获取成功，开始上传");
@@ -508,36 +479,6 @@
       }
     }
 
-    // 检查是否有待处理的上传
-    function checkPendingUpload() {
-      const pendingUpload = localStorage.getItem('pendingUpload');
-      if (pendingUpload) {
-        try {
-          const uploadInfo = JSON.parse(pendingUpload);
-          const timeDiff = Date.now() - uploadInfo.timestamp;
-          
-          // 如果时间差小于5分钟，尝试恢复上传
-          if (timeDiff < 5 * 60 * 1000 && pdfBlob && filename) {
-            console.log("检测到待处理的上传，尝试恢复...");
-            showUploadStatus("📄 Versuche Upload fortzusetzen...", "warning");
-            
-            // 清除待处理状态
-            localStorage.removeItem('pendingUpload');
-            
-            // 延迟2秒后尝试上传
-            setTimeout(async () => {
-              await uploadToOneDrive(pdfBlob, filename);
-            }, 2000);
-          } else {
-            // 清除过期的待处理状态
-            localStorage.removeItem('pendingUpload');
-          }
-        } catch (error) {
-          console.error("解析待处理上传信息失败:", error);
-          localStorage.removeItem('pendingUpload');
-        }
-      }
-    }
 
     // 绑定事件监听器
     function bindEventListeners() {
@@ -720,14 +661,21 @@
       if (autoUploadCheckbox && autoUploadCheckbox.checked && account) {
         // 延迟500ms后自动上传PDF和CSV，给用户看到PDF生成成功的反馈
         setTimeout(async () => {
-          // 先上传PDF
-          const pdfUploadSuccess = await uploadToOneDrive(pdfBlob, filename);
-          
-          // 如果PDF上传成功，再上传CSV
-          if (pdfUploadSuccess) {
-            setTimeout(async () => {
+          try {
+            // 先上传PDF
+            console.log("开始自动上传PDF...");
+            const pdfUploadSuccess = await uploadToOneDrive(pdfBlob, filename);
+            
+            // 如果PDF上传成功，等待2秒后上传CSV
+            if (pdfUploadSuccess) {
+              console.log("PDF上传成功，等待2秒后上传CSV...");
+              await new Promise(resolve => setTimeout(resolve, 2000));
+              console.log("开始自动上传CSV...");
               await uploadCSVToOneDrive();
-            }, 1000); // 延迟1秒上传CSV，避免同时请求
+            }
+          } catch (error) {
+            console.error("自动上传过程中出错:", error);
+            showUploadStatus(`❌ 自动上传失败: ${error.message}`, "error");
           }
         }, 500);
       }
