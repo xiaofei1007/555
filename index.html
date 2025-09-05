@@ -324,9 +324,8 @@
       try {
         showUploadStatus("⏳ Berechtigung für CSV-Upload wird überprüft...", "");
         
-        // 生成带时间戳的唯一CSV文件名，避免覆盖
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-        const csvFileName = `PalettenscheinData-${timestamp}.csv`;
+        // 使用固定文件名，所有数据累积到同一个文件
+        const csvFileName = "PalettenscheinData.csv";
         console.log(`开始上传CSV文件: ${csvFileName}`);
         
         const accessToken = await getFileAccessToken();
@@ -338,8 +337,37 @@
         const folderName = "Palettenscheine";
         await createOneDriveFolder(accessToken, folderName);
         
+        // 检查CSV文件是否已存在，如果存在则获取现有内容进行追加
+        let existingCsvContent = "";
+        const checkUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${folderName}/${csvFileName}:/content`;
+        
+        try {
+          console.log("检查CSV文件是否已存在...");
+          const checkResponse = await fetch(checkUrl, {
+            headers: {
+              "Authorization": `Bearer ${accessToken}`
+            }
+          });
+          
+          if (checkResponse.ok) {
+            existingCsvContent = await checkResponse.text();
+            console.log("找到现有CSV文件，将追加新数据");
+          } else {
+            console.log("CSV文件不存在，将创建新文件");
+            // 如果文件不存在，添加表头
+            existingCsvContent = "Nr,Datum,Spedition,Empfaenger,Lieferant,WA_WE,Europaletten,Einwegpaletten,Hinweis\n";
+          }
+        } catch (error) {
+          console.log("检查CSV文件时出错，将创建新文件:", error);
+          existingCsvContent = "Nr,Datum,Spedition,Empfaenger,Lieferant,WA_WE,Europaletten,Einwegpaletten,Hinweis\n";
+        }
+        
+        // 合并现有内容和新数据（只追加新的行，不重复表头）
+        const newRows = csvContent.split('\n').slice(1).filter(row => row.trim() !== ''); // 去掉表头和空行
+        const finalCsvContent = existingCsvContent.trimEnd() + '\n' + newRows.join('\n') + '\n';
+        
         // 创建CSV Blob
-        const csvBlob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+        const csvBlob = new Blob([finalCsvContent], { type: "text/csv;charset=utf-8;" });
         
         // 上传CSV文件到指定文件夹
         const uploadUrl = `https://graph.microsoft.com/v1.0/me/drive/root:/${folderName}/${csvFileName}:/content`;
@@ -781,9 +809,8 @@
       const link = document.createElement("a");
       link.href = URL.createObjectURL(blob);
       
-      // 生成带时间戳的唯一CSV文件名，与OneDrive上传保持一致
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      link.download = `PalettenscheinData-${timestamp}.csv`;
+      // 使用固定文件名，与OneDrive上传保持一致
+      link.download = "PalettenscheinData.csv";
       link.click();
     });
   </script>
