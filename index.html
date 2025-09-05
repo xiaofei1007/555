@@ -356,6 +356,14 @@
           const result = await response.json();
           showUploadStatus(`✅ CSV erfolgreich zu OneDrive hochgeladen: ${csvFileName}`, "success");
           console.log("CSV文件上传成功:", result);
+          
+          // 标记CSV上传完成
+          uploadStatus.csvUploaded = true;
+          console.log("CSV上传完成，更新状态");
+          
+          // 检查是否需要刷新页面
+          uploadStatus.checkAndRefresh();
+          
           return true;
         } else {
           const errorText = await response.text();
@@ -428,6 +436,14 @@
           const fileUrl = result.webUrl || `OneDrive/${folderName}/${fileName}`;
           showUploadStatus(`✅ PDF erfolgreich zu OneDrive hochgeladen: ${fileName}`, "success");
           console.log("文件上传成功:", result);
+          
+          // 标记PDF上传完成
+          uploadStatus.pdfUploaded = true;
+          console.log("PDF上传完成，更新状态");
+          
+          // 检查是否需要刷新页面
+          uploadStatus.checkAndRefresh();
+          
           return true;
         } else {
           const errorText = await response.text();
@@ -533,10 +549,13 @@
       }
       
       if (uploadButton) {
-        uploadButton.addEventListener("click", (e) => {
+        uploadButton.addEventListener("click", async (e) => {
           e.preventDefault();
           if (pdfBlob && filename) {
-            uploadToOneDrive(pdfBlob, filename);
+            // 重置上传状态
+            uploadStatus.reset();
+            console.log("开始手动上传PDF，重置上传状态");
+            await uploadToOneDrive(pdfBlob, filename);
           } else {
             showUploadStatus("❌ Bitte generieren Sie zuerst ein PDF!", "error");
           }
@@ -544,9 +563,14 @@
       }
       
       if (uploadCSVButton) {
-        uploadCSVButton.addEventListener("click", (e) => {
+        uploadCSVButton.addEventListener("click", async (e) => {
           e.preventDefault();
-          uploadCSVToOneDrive();
+          // 如果还没开始上传流程，重置状态
+          if (!uploadStatus.pdfUploaded && !uploadStatus.csvUploaded) {
+            uploadStatus.reset();
+            console.log("开始手动上传CSV，重置上传状态");
+          }
+          await uploadCSVToOneDrive();
         });
       }
     }
@@ -637,6 +661,31 @@
     // ------------------ CSV 缓存 ------------------
     let csvContent = "Nr,Datum,Spedition,Empfaenger,Lieferant,WA_WE,Europaletten,Einwegpaletten,Hinweis\n";
 
+    // ------------------ 上传状态跟踪 ------------------
+    let uploadStatus = {
+      pdfUploaded: false,
+      csvUploaded: false,
+      isAutoUpload: false, // 标记是否为自动上传
+      reset: function() {
+        this.pdfUploaded = false;
+        this.csvUploaded = false;
+        this.isAutoUpload = false;
+      },
+      checkAndRefresh: function() {
+        console.log("检查上传状态:", this);
+        if (this.pdfUploaded && this.csvUploaded) {
+          console.log("PDF和CSV都已上传完成，准备刷新页面...");
+          showUploadStatus("✅ 所有文件上传完成！页面将在3秒后自动刷新...", "success");
+          
+          // 3秒后刷新页面
+          setTimeout(() => {
+            console.log("刷新页面...");
+            window.location.reload();
+          }, 3000);
+        }
+      }
+    };
+
     function convertToCSVRow(data) {
       return `${data.Nr},${data.Datum},${data.Spedition},${data.Empfaenger},${data.Lieferant},${data.WA_WE},${data.Europaletten},${data.Einwegpaletten},${data.Hinweis}\n`;
     }
@@ -691,6 +740,11 @@
         // 延迟500ms后自动上传PDF和CSV，给用户看到PDF生成成功的反馈
         setTimeout(async () => {
           try {
+            // 重置上传状态，开始自动上传流程
+            uploadStatus.reset();
+            uploadStatus.isAutoUpload = true;
+            console.log("开始自动上传流程，重置上传状态");
+            
             // 先上传PDF
             console.log("开始自动上传PDF...");
             const pdfUploadSuccess = await uploadToOneDrive(pdfBlob, filename);
